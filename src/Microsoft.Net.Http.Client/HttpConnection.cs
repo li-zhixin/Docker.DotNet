@@ -3,7 +3,12 @@ namespace Microsoft.Net.Http.Client;
 internal sealed class HttpConnection : IDisposable
 {
     private static readonly ISet<string> DockerStreamHeaders = new HashSet<string>{ "application/vnd.docker.raw-stream", "application/vnd.docker.multiplexed-stream" };
+
+#if NET5_0_OR_GREATER
     internal static readonly HttpRequestOptionsKey<bool> DisableChunkedResponseKey = new HttpRequestOptionsKey<bool>("DockerDotNetDisableChunkedResponse");
+#else
+    internal const string DisableChunkedResponseKey = "DockerDotNetDisableChunkedResponse";
+#endif
 
     public HttpConnection(BufferedReadStream transport)
     {
@@ -172,7 +177,7 @@ internal sealed class HttpConnection : IDisposable
 
         // Treat the response as chunked for standard HTTP chunked or Docker raw-streams,
         // but not for upgraded connections.
-        var disableChunkedResponse = request.Options.TryGetValue(DisableChunkedResponseKey, out var disableChunked) && disableChunked;
+        var disableChunkedResponse = TryGetDisableChunkedResponseOption(request);
         var isChunkedTransferEncoding = !disableChunkedResponse &&
                                         ((response.Headers.TransferEncodingChunked.GetValueOrDefault() && !isConnectionUpgrade)
                                          || (!isConnectionUpgrade && isStream));
@@ -187,6 +192,20 @@ internal sealed class HttpConnection : IDisposable
         }
 
         return response;
+    }
+
+    private static bool TryGetDisableChunkedResponseOption(HttpRequestMessage request)
+    {
+#if NET5_0_OR_GREATER
+        return request.Options.TryGetValue(DisableChunkedResponseKey, out var disableChunked) && disableChunked;
+#else
+        // For .NET Standard, use Properties dictionary
+        if (request.Properties.TryGetValue(DisableChunkedResponseKey, out var value) && value is bool boolValue)
+        {
+            return boolValue;
+        }
+        return false;
+#endif
     }
 
     public void Dispose()
