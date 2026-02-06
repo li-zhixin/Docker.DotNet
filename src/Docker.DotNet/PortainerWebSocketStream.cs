@@ -63,7 +63,7 @@ internal sealed class PortainerWebSocketStream : WriteClosableStream
 
             return result.Count;
         }
-        catch (WebSocketException) when (_webSocket.State == WebSocketState.Aborted)
+        catch (WebSocketException)
         {
             // If the connection was closed/aborted (e.g. via Dispose), return 0 to indicate end of stream
             return 0;
