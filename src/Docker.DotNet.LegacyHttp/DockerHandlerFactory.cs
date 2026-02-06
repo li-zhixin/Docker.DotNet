@@ -10,7 +10,11 @@ public sealed class DockerHandlerFactory : IDockerHandlerFactory
 
     public Tuple<HttpMessageHandler, Uri> CreateHandler(Uri uri, IDockerClientConfiguration configuration, ILogger logger)
     {
-        var scheme = configuration.Credentials.IsTlsCredentials() ? Uri.UriSchemeHttps : Uri.UriSchemeHttp;
+        // Preserve the original scheme if it's already https, otherwise determine based on credentials
+        var originalScheme = uri.Scheme.ToLowerInvariant();
+        var scheme = originalScheme == Uri.UriSchemeHttps
+            ? Uri.UriSchemeHttps
+            : (configuration.Credentials.IsTlsCredentials() ? Uri.UriSchemeHttps : Uri.UriSchemeHttp);
         uri = new UriBuilder(uri) { Scheme = scheme }.Uri;
         return new Tuple<HttpMessageHandler, Uri>(new ManagedHandler(logger), uri);
     }
