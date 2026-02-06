@@ -4,14 +4,11 @@ using System.Net.WebSockets;
 
 internal sealed class PortainerWebSocketStream : WriteClosableStream
 {
-    private readonly ClientWebSocket _webSocket;
+    private readonly WebSocket _webSocket;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
-    private readonly byte[] _receiveBuffer = new byte[8192];
-    private byte[] _pendingBuffer = Array.Empty<byte>();
-    private int _pendingOffset;
     private bool _disposed;
 
-    public PortainerWebSocketStream(ClientWebSocket webSocket)
+    public PortainerWebSocketStream(WebSocket webSocket)
     {
         _webSocket = webSocket ?? throw new ArgumentNullException(nameof(webSocket));
     }
@@ -48,22 +45,29 @@ internal sealed class PortainerWebSocketStream : WriteClosableStream
             throw new ObjectDisposedException(nameof(PortainerWebSocketStream));
         }
 
-        if (_pendingOffset >= _pendingBuffer.Length)
+        try
         {
-            _pendingBuffer = await ReceiveMessageAsync(cancellationToken).ConfigureAwait(false);
-            _pendingOffset = 0;
-        }
+            var result = await _webSocket.ReceiveAsync(new ArraySegment<byte>(buffer, offset, count), cancellationToken).ConfigureAwait(false);
+            if (result.MessageType == WebSocketMessageType.Close)
+            {
+                try
+                {
+                    await _webSocket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, string.Empty, cancellationToken).ConfigureAwait(false);
+                }
+                catch (WebSocketException)
+                {
+                    // Ignore errors during close handshake response as we are closing anyway
+                }
+                return 0;
+            }
 
-        if (_pendingBuffer.Length == 0)
+            return result.Count;
+        }
+        catch (WebSocketException) when (_webSocket.State == WebSocketState.Aborted)
         {
+            // If the connection was closed/aborted (e.g. via Dispose), return 0 to indicate end of stream
             return 0;
         }
-
-        var remaining = _pendingBuffer.Length - _pendingOffset;
-        var toCopy = Math.Min(count, remaining);
-        Array.Copy(_pendingBuffer, _pendingOffset, buffer, offset, toCopy);
-        _pendingOffset += toCopy;
-        return toCopy;
     }
 
     public override void Write(byte[] buffer, int offset, int count)
@@ -139,41 +143,5 @@ internal sealed class PortainerWebSocketStream : WriteClosableStream
         }
 
         base.Dispose(disposing);
-    }
-
-    private async Task<byte[]> ReceiveMessageAsync(CancellationToken cancellationToken)
-    {
-        using var bufferStream = new MemoryStream();
-
-        while (true)
-        {
-            WebSocketReceiveResult result;
-            try
-            {
-                result = await _webSocket.ReceiveAsync(new ArraySegment<byte>(_receiveBuffer), cancellationToken)
-                    .ConfigureAwait(false);
-            }
-            catch (WebSocketException) when (_webSocket.State is WebSocketState.Aborted or WebSocketState.Closed or WebSocketState.CloseReceived)
-            {
-                return Array.Empty<byte>();
-            }
-
-            if (result.MessageType == WebSocketMessageType.Close)
-            {
-                return Array.Empty<byte>();
-            }
-
-            if (result.Count > 0)
-            {
-                bufferStream.Write(_receiveBuffer, 0, result.Count);
-            }
-
-            if (result.EndOfMessage)
-            {
-                break;
-            }
-        }
-
-        return bufferStream.ToArray();
     }
 }
